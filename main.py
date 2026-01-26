@@ -214,15 +214,15 @@ class InterfazSeleccionFecha:
         self.ejecutar_proceso = False
         self.root.destroy()
 
-
 class CopiarArchivo:
     def __init__(self, fecha_filtrado=None):
         # RUTAS
-        self.ruta_origen = Path(r"C:\Users\auxtesoreria2\OneDrive - GCO\Escritorio\CONTROL PAGOS.xlsx")
-        self.ruta_destino = Path(r"C:\Users\auxtesoreria2\OneDrive - GCO\Escritorio\finanzas\info bancos\proyección semana")
-        
+        self.ruta_origen = Path(r"C:\Users\auxtesoreria2\OneDrive - GCO\Escritorio\CONTROL DE PAGOS.xlsx")
+        self.ruta_intermedio = Path(r"C:\Users\auxtesoreria2\OneDrive - GCO\Escritorio\finanzas\info bancos\Pagos internacionales\proyección semana")
+        self.ruta_destino_final = Path(r"C:\Users\auxtesoreria2\OneDrive - GCO\Escritorio\finanzas\info bancos\Pagos internacionales\CONTROL PAGOS.xlsx")
+
         # NOMBRES DE HOJAS
-        self.nombre_primera_hoja = "Pagos importación"
+        self.nombre_primera_hoja = "Control_Pagos"
         
         # FECHA DE FILTRADO
         self.fecha_filtrado = fecha_filtrado
@@ -236,6 +236,18 @@ class CopiarArchivo:
             'VALOR A PAGAR',
             'MONEDA',
             'NC'
+        ]
+
+        self.empresas_globales = [
+            'AMERICANINO',
+            'ESPRIT',
+            'CHEVIGNON'
+        ]
+
+        self.empresas_unified = [
+            'NAF NAF',
+            'RIFLE',
+            'AMERICAN EAGLE'
         ]
 
     def log(self, mensaje, tipo="INFO"):
@@ -268,21 +280,21 @@ class CopiarArchivo:
     
     def crear_estructura_carpetas(self, fecha):
         """Crea la estructura: Año 2026/ENERO/"""
-        año_carpeta = f"Año {fecha.strftime('%Y')}"
+        año_carpeta = f"AÑO {fecha.strftime('%Y')}"
         mes_carpeta = fecha.strftime('%B').upper()
         
-        carpeta_destino = self.ruta_destino / año_carpeta / mes_carpeta
+        carpeta_destino = self.ruta_intermedio / año_carpeta / mes_carpeta
         carpeta_destino.mkdir(parents=True, exist_ok=True)
         return carpeta_destino
 
-    def copiar_archivo_base(self, ruta_destino):
+    def copiar_archivo_base(self, ruta_intermedio):
         """Copia el archivo base y elimina hojas adicionales"""
         self.log(f"Copiando archivo base...", "PROCESO")
-        shutil.copy2(self.ruta_origen, ruta_destino)
+        shutil.copy2(self.ruta_origen, ruta_intermedio)
         
-        try:
+        """ try:
             self.log("Limpiando hojas adicionales...", "PROCESO")
-            wb = openpyxl.load_workbook(ruta_destino)
+            wb = openpyxl.load_workbook(ruta_intermedio)
             
             hojas_borradas = 0
             for sheet_name in list(wb.sheetnames):
@@ -292,18 +304,18 @@ class CopiarArchivo:
             
             if hojas_borradas > 0:
                 self.log(f"Se eliminaron {hojas_borradas} hojas adicionales", "INFO")
-            
             if self.nombre_primera_hoja in wb.sheetnames:
+            
                 wb.active = wb[self.nombre_primera_hoja]
             
             # Reintento de guardado
             while True:
                 try:
-                    wb.save(ruta_destino)
+                    wb.save(ruta_intermedio)
                     break
                 except PermissionError:
-                    self.log(f"EL ARCHIVO ESTÁ ABIERTO: {ruta_destino.name}", "WARN")
                     print("⚠ Por favor, cierre el archivo en Excel para continuar.")
+                    self.log(f"EL ARCHIVO ESTÁ ABIERTO: {ruta_intermedio.name}", "WARN")
                     respuesta = input("Presione ENTER cuando lo haya cerrado (o 'C' para cancelar): ")
                     if respuesta.strip().upper() == 'C':
                         raise Exception("Cancelado por el usuario")
@@ -312,7 +324,7 @@ class CopiarArchivo:
             self.log("Archivo base preparado correctamente", "OK")
             
         except Exception as e:
-            self.log(f"Error al limpiar hojas: {str(e)}", "WARN")
+            self.log(f"Error al limpiar hojas: {str(e)}", "WARN") """
 
     def leer_datos_control_pagos(self, ruta_archivo):
         """Lee la hoja 'Pagos importación' del archivo"""
@@ -352,19 +364,20 @@ class CopiarArchivo:
         
         self.log(f"Fecha a filtrar: {fecha_filtrado.strftime('%d/%m/%Y')} - {dia_nombre}", "INFO")
         
-        if 'FECHA DE PAGO' in df.columns:
-            df['FECHA DE PAGO'] = pd.to_datetime(df['FECHA DE PAGO'], errors='coerce')
+        if 'FECHA DE VENCIMIENTO' in df.columns and 'ESTADO' in df.columns:
+            df['FECHA DE VENCIMIENTO'] = pd.to_datetime(df['FECHA DE VENCIMIENTO'], errors='coerce')
+            df['ESTADO'] =='PAGAR'
             
             # Ajuste: fecha_filtrado ya es un objeto date, no datetime, así que no tiene método .date()
             # Si fecha_filtrado es datetime, usamos .date(), si es date, lo usamos directo
             fecha_comparar = fecha_filtrado.date() if isinstance(fecha_filtrado, datetime) else fecha_filtrado
             
-            df_filtrado = df[df['FECHA DE PAGO'].dt.date == fecha_comparar].copy()
+            df_filtrado = df[(df['FECHA DE VENCIMIENTO'].dt.date == fecha_comparar) & (df['ESTADO'] =='PAGAR')].copy()
             
             self.log(f"Registros encontrados: {len(df_filtrado)}", "OK")
             return df_filtrado
         else:
-            self.log("No se encontró la columna 'FECHA DE PAGO'", "ERROR")
+            self.log("No se encontró la columna 'FECHA DE PAGO' ni 'ESTADO'", "ERROR")
             return pd.DataFrame()
 
     def preparar_datos_segunda_hoja(self, df_filtrado):
@@ -384,18 +397,17 @@ class CopiarArchivo:
         
         if 'NRO. IMPO' in df_filtrado.columns:
             df_resultado['NRO. IMPO'] = df_filtrado['NRO. IMPO']
-        elif '# IMPORTACION' in df_filtrado.columns:
-            df_resultado['NRO. IMPO'] = df_filtrado['# IMPORTACION']
         
         if 'VALOR A PAGAR' in df_filtrado.columns:
             df_resultado['VALOR A PAGAR'] = df_filtrado['VALOR A PAGAR']
-        elif 'VALOR MONEDA ORIGEN' in df_filtrado.columns:
-            df_resultado['VALOR A PAGAR'] = df_filtrado['VALOR MONEDA ORIGEN']
         
         if 'MONEDA' in df_filtrado.columns:
             df_resultado['MONEDA'] = df_filtrado['MONEDA']
-        
-        df_resultado['NC'] = ''
+
+        if 'NC' in df_filtrado.columns:
+            df_resultado['NC'] = df_filtrado['VALOR NOTA CRÉDITO']
+        else:
+            df_resultado['NC'] = ''
         
         self.log(f"Datos preparados: {len(df_resultado)} registros", "OK")
         return df_resultado
@@ -510,7 +522,7 @@ class CopiarArchivo:
     def ejecutar_proceso(self):
         """Ejecuta el proceso completo"""
         print("\n" + "="*80)
-        print("AUTOMATIZACIÓN DE CONTROL DE PAGOS")
+        print("    AUTOMATIZACIÓN DE CONTROL DE PAGOS")
         print("="*80 + "\n")
         
         try:
@@ -618,7 +630,6 @@ def ejecucion_copiador():
     
     print()
     input("Presiona ENTER para cerrar...")
-
 
 if __name__ == "__main__":
     ejecucion_copiador()
