@@ -286,7 +286,7 @@ class CopiarArchivo:
                 if respuesta.strip().upper() == 'C':
                     raise Exception("Cancelado por el usuario")
         
-        # Intentar limpiar hojas adicionales
+        """ # Intentar limpiar hojas adicionales
         try:
             self.log("Limpiando hojas adicionales...", "PROCESO")
             wb = openpyxl.load_workbook(ruta_destino)
@@ -308,7 +308,7 @@ class CopiarArchivo:
             self.log("Archivo base preparado correctamente", "OK")
             
         except Exception as e:
-            self.log(f"Error al limpiar hojas: {str(e)}", "WARN")
+            self.log(f"Error al limpiar hojas: {str(e)}", "WARN") """
 
     def guardar_con_reintento(self, wb, ruta):
         """Guarda un workbook con lógica de reintento"""
@@ -425,7 +425,7 @@ class CopiarArchivo:
                 
         # Asegurar que NOTA CRÉDITO exista aunque sea vacía
         if 'NOTA CRÉDITO' not in df_resultado.columns:
-            df_resultado['NOTA CRÉDITO'] = 0
+            df_resultado['NOTA CRÉDITO'] = 0.00
             
         return df_resultado
 
@@ -480,18 +480,18 @@ class CopiarArchivo:
         # Columnas directas
         df_final_append['IMPORTADOR'] = df_detalle['IMPORTADOR']
         df_final_append['MARCA'] = df_detalle['MARCA']
-        df_final_append['PROVEEDOR'] = df_detalle['PROVEEDOR']
-        df_final_append['# IMPORTACION'] = df_detalle['NRO. IMPO']
-        
-        # Fechas
+
+         # Fechas
         # FECHA DE PAGO => Dia del archivo (que es la fecha de proyección)
         # Formato numérico de Excel para fechas es dias desde 1900, pero aqui piden "dia/mes/año todo en número"
         # Asumiremos string "dd/mm/yyyy" o fecha datetime
         df_final_append['FECHA DE PAGO'] = fecha_proyeccion.strftime('%d/%m/%Y')
         
-        df_final_append['DIA'] = fecha_proyeccion.day
-        df_final_append['MES'] = fecha_proyeccion.month
-        df_final_append['AÑO'] = fecha_proyeccion.year
+        df_final_append['DIA'] = """ fecha_proyeccion.day """ ''
+        df_final_append['MES'] = """ fecha_proyeccion.month """ ''
+        df_final_append['AÑO'] = """ fecha_proyeccion.year """ ''
+        df_final_append['PROVEEDOR'] = df_detalle['PROVEEDOR']
+        df_final_append['# IMPORTACION'] = df_detalle['NRO. IMPO']
         
         # Valores
         df_final_append['VALOR MONEDA ORIGEN'] = df_detalle['VALOR A PAGAR']
@@ -564,7 +564,6 @@ class CopiarArchivo:
         except Exception as e:
             self.log(f"Error al escribir en archivo final: {str(e)}", "ERROR")
 
-
     def aplicar_formato_excel(self, ruta_archivo, nombre_segunda_hoja):
         """Aplica formato profesional a la hoja de proyección"""
         self.log(f"Aplicando formato...", "PROCESO")
@@ -574,9 +573,9 @@ class CopiarArchivo:
         if nombre_segunda_hoja in wb.sheetnames:
             ws = wb[nombre_segunda_hoja]
             
-            header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+            header_fill = PatternFill(start_color="9582b3", end_color="9582b3", fill_type="solid")
             header_font = Font(bold=True, color="FFFFFF", size=11)
-            total_fill = PatternFill(start_color="FFC000", end_color="FFC000", fill_type="solid")
+            total_fill = PatternFill(start_color="aee6b8", end_color="aee6b8", fill_type="solid")
             total_font = Font(bold=True, size=10)
             
             border_thin = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
@@ -610,7 +609,7 @@ class CopiarArchivo:
                 # Columna A es index 0. Si row[0] es vacio...
                 if row[0].value in [None, '']:
                     for cell in row:
-                        cell.fill = total_fill
+                        cell.fill = total_fill, r"\n"
                         cell.font = total_font
                 
                 # Formato números (VALOR A PAGAR es col index 6, NOTA CREDITO index 5)
@@ -696,7 +695,7 @@ class CopiarArchivo:
             print("\n" + "="*80)
             print("PROCESO COMPLETADO EXITOSAMENTE")
             print("="*80)
-            print(f"📁 Archivo Proyección: {ruta_archivo_nuevo}")
+            print(f"\n📁 Archivo Proyección: {ruta_archivo_nuevo}")
             print(f"📁 Archivo Final Actualizado: {self.ruta_destino_final}")
             
             messagebox.showinfo("Éxito", "El proceso ha finalizado correctamente.")
@@ -708,7 +707,6 @@ class CopiarArchivo:
             traceback.print_exc()
             messagebox.showerror("Error", f"Ocurrió un error: {str(e)}")
             return None
-
 
 def ejecucion_copiador():
     interfaz = InterfazSeleccionFecha()
