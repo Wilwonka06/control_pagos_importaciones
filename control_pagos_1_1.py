@@ -372,7 +372,6 @@ class InterfazModerna:
             self.ejecutar_proceso = False
             self.root.destroy()
 
-
 class VentanaProgreso:
     """Ventana moderna de progreso"""
     def __init__(self, parent=None):
@@ -924,7 +923,6 @@ class CopiarArchivo:
             messagebox.showerror("Error", f"Ocurrió un error:\n\n{str(e)}")
             return None
 
-
 def main():
     """Función principal de la aplicación"""
     # Mostrar ventana de selección de fecha
@@ -962,7 +960,6 @@ def main():
     except Exception as e:
         ventana_prog.cerrar()
         messagebox.showerror("Error Fatal", f"Error inesperado:\n\n{str(e)}")
-
 
 if __name__ == "__main__":
     main()
