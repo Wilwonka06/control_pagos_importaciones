@@ -23,14 +23,22 @@ Palabra2 = "Mundo Hola"
 
 print(es_anagrama(Palabra1, Palabra2)) """
 
-#serie fibonacci
-def fibonacci(num):
-    num+=1
-    if num == 0:
-        return 0
-    elif num == 1:
-        return 1
-    else:
-        return fibonacci(num - 1) + fibonacci(num - 2)
-print(fibonacci(n))
 
+""" #successionfibonacci
+
+def fibonacci():
+    for i in range(50):
+        print(i)
+        if i == 0:
+            i+1
+        elif i == 1:
+            i+1
+        else:
+            print(i-1 + i-2)
+
+fibonacci() """
+
+
+for i in range(101):
+    if i % 2 != 0:
+        print(i)

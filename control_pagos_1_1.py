@@ -6,6 +6,8 @@ Con interfaz gráfica para seleccionar fecha de filtrado
 import shutil
 import pandas as pd
 import openpyxl
+import win32com.client
+import pythoncom
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.utils.dataframe import dataframe_to_rows
 from pathlib import Path
@@ -36,7 +38,7 @@ class InterfazSeleccionFecha:
         """Crea la ventana de interfaz"""
         self.root = tk.Tk()
         self.root.title("Automatización Control de Pagos")
-        self.root.geometry("500x480")
+        self.root.geometry("600x500")
         self.root.resizable(False, False)
         
         # Centrar ventana
@@ -86,7 +88,7 @@ class InterfazSeleccionFecha:
         self.calendario = DateEntry(
             calendar_frame,
             width=20,
-            background='#366092',
+            background='#000000',
             foreground='white',
             borderwidth=2,
             font=("Segoe UI", 11),
@@ -104,7 +106,7 @@ class InterfazSeleccionFecha:
             calendar_frame,
             text="Por defecto se sugiere el próximo miércoles",
             font=("Segoe UI", 8),
-            foreground="gray"
+            foreground="#000000"
         )
         ayuda_label.pack(pady=(5, 10))
         
@@ -128,9 +130,9 @@ class InterfazSeleccionFecha:
             command=self.ejecutar,
             bg="#366092",
             fg="white",
-            font=("Segoe UI", 11, "bold"),
-            width=20,
-            height=2,
+            font=("Segoe UI", 10, "bold"),
+            width=17,
+            height=1,
             cursor="hand2",
             relief=tk.FLAT
         )
@@ -143,9 +145,9 @@ class InterfazSeleccionFecha:
             command=self.cancelar,
             bg="#dc3545",
             fg="white",
-            font=("Segoe UI", 11),
-            width=15,
-            height=2,
+            font=("Segoe UI", 10),
+            width=13,
+            height=1,
             cursor="hand2",
             relief=tk.FLAT
         )
@@ -285,30 +287,6 @@ class CopiarArchivo:
                 respuesta = input("Presione ENTER cuando lo haya cerrado (o 'C' para cancelar): ")
                 if respuesta.strip().upper() == 'C':
                     raise Exception("Cancelado por el usuario")
-        
-        """ # Intentar limpiar hojas adicionales
-        try:
-            self.log("Limpiando hojas adicionales...", "PROCESO")
-            wb = openpyxl.load_workbook(ruta_destino)
-            
-            hojas_borradas = 0
-            for sheet_name in list(wb.sheetnames):
-                if sheet_name != self.nombre_primera_hoja:
-                    wb.remove(wb[sheet_name])
-                    hojas_borradas += 1
-            
-            if hojas_borradas > 0:
-                self.log(f"Se eliminaron {hojas_borradas} hojas adicionales", "INFO")
-            
-            if self.nombre_primera_hoja in wb.sheetnames:
-                wb.active = wb[self.nombre_primera_hoja]
-            
-            self.guardar_con_reintento(wb, ruta_destino)
-            wb.close()
-            self.log("Archivo base preparado correctamente", "OK")
-            
-        except Exception as e:
-            self.log(f"Error al limpiar hojas: {str(e)}", "WARN") """
 
     def guardar_con_reintento(self, wb, ruta):
         """Guarda un workbook con lógica de reintento"""
@@ -467,163 +445,229 @@ class CopiarArchivo:
         """Agrega los registros al tercer archivo (Final)"""
         self.log(f"Procesando archivo final: {self.ruta_destino_final.name}...", "PROCESO")
         
+        try:
+            # Preparar datos
+            df_final = self.preparar_df_final(df_detalle)
+            self.log(f"Registros a agregar: {len(df_final)}", "INFO")
+            
+            # Anexar usando COM
+            self.anexar_archivo_final_com(df_final)
+            
+        except Exception as e:
+            self.log(f"Error en proceso final: {str(e)}", "ERROR")
+
+    def guardar_proyeccion_com(self, ruta_archivo, df_datos, nombre_hoja):
+        """
+        Guarda la proyección y aplica formato usando COM (win32com)
+        para preservar integridad del archivo original (imágenes, estilos).
+        """
+        self.log(f"Guardando proyección y aplicando formato (COM)...", "PROCESO")
+        
+        excel = None
+        wb = None
+        try:
+            pythoncom.CoInitialize()
+            excel = win32com.client.Dispatch("Excel.Application")
+            excel.Visible = False
+            excel.DisplayAlerts = False
+            
+            # Abrir archivo (ruta absoluta requerida)
+            ruta_abs = str(Path(ruta_archivo).resolve())
+            wb = excel.Workbooks.Open(ruta_abs)
+            
+            # Crear nueva hoja al final
+            try:
+                ws = wb.Sheets.Add(After=wb.Sheets(wb.Sheets.Count))
+                ws.Name = nombre_hoja
+            except Exception:
+                # Si falla renombrar (ej. ya existe), usar la creada
+                ws = excel.ActiveSheet
+            
+            # Escribir datos
+            # Convertir DataFrame a lista de listas (incluyendo encabezados)
+            datos = [df_datos.columns.tolist()] + df_datos.fillna("").values.tolist()
+            
+            # Definir rango
+            filas = len(datos)
+            columnas = len(datos[0])
+            
+            # Escribir en bloque (mucho más rápido que celda por celda)
+            rango_datos = ws.Range(ws.Cells(1, 1), ws.Cells(filas, columnas))
+            rango_datos.Value = datos
+            
+            # --- APLICAR FORMATO ---
+            
+            # 1. Encabezados (Fila 1)
+            rango_header = ws.Range(ws.Cells(1, 1), ws.Cells(1, columnas))
+            rango_header.Interior.Color = 11764117  # Color aproximado al '9582b3' (RGB int)
+            rango_header.Font.Bold = True
+            rango_header.Font.Color = 16777215 # Blanco
+            rango_header.HorizontalAlignment = -4108 # xlCenter
+            rango_header.VerticalAlignment = -4108 # xlCenter
+            rango_header.Borders.LineStyle = 1 # xlContinuous
+            
+            # 2. Datos y Bordes
+            rango_completo = ws.Range(ws.Cells(1, 1), ws.Cells(filas, columnas))
+            rango_completo.Borders.LineStyle = 1
+            
+            # 3. Formato Totales y Números
+            # Iterar filas para formato condicional (Totales)
+            # Columnas clave (base 1): IMPORTADOR(1), VALOR A PAGAR(7), NOTA CRÉDITO(6)
+            # Nota: Indices en df son 0-based, en Excel 1-based.
+            # df cols: IMPORTADOR, MARCA, PROVEEDOR, NRO. IMPO, MONEDA, NOTA CRÉDITO, VALOR A PAGAR, ESTADO
+            col_imp = 1
+            col_nc = 6
+            col_val = 7
+            
+            for i in range(2, filas + 1):
+                # Verificar si es total (Importador vacío pero Valor > 0)
+                val_imp = ws.Cells(i, col_imp).Value
+                
+                if val_imp is None or str(val_imp).strip() == "":
+                    # Es fila de total
+                    rango_fila = ws.Range(ws.Cells(i, 1), ws.Cells(i, columnas))
+                    rango_fila.Interior.Color = 12117678 # Verde claro 'aee6b8'
+                    rango_fila.Font.Bold = True
+            
+            # Formato Números
+            # Rango columna valores
+            rango_vals = ws.Range(ws.Cells(2, col_val), ws.Cells(filas, col_val))
+            rango_vals.NumberFormat = "#,##0.00"
+            
+            rango_nc = ws.Range(ws.Cells(2, col_nc), ws.Cells(filas, col_nc))
+            rango_nc.NumberFormat = "#,##0.00"
+            
+            # 4. Autoajustar columnas
+            ws.Columns.AutoFit()
+            
+            # Freeze panes
+            excel.ActiveWindow.SplitRow = 1
+            excel.ActiveWindow.FreezePanes = True
+            
+            wb.Save()
+            self.log(f"Proyección guardada y formateada correctamente", "OK")
+            
+        except Exception as e:
+            self.log(f"Error COM en proyección: {str(e)}", "ERROR")
+            raise e
+        finally:
+            if wb: wb.Close()
+            if excel: excel.Quit()
+            pythoncom.CoUninitialize()
+
+    def anexar_archivo_final_com(self, df_detalle):
+        """
+        Anexa registros al archivo final y expande la tabla automáticamente (COM).
+        """
+        self.log(f"Anexando al archivo final (COM)...", "PROCESO")
+        
         if not self.ruta_destino_final.exists():
-            self.log(f"No existe el archivo final: {self.ruta_destino_final}", "ERROR")
+            self.log("Archivo final no existe", "ERROR")
             return
 
-        # Preparar datos para el archivo final
+        excel = None
+        wb = None
+        try:
+            pythoncom.CoInitialize()
+            excel = win32com.client.Dispatch("Excel.Application")
+            excel.Visible = False
+            excel.DisplayAlerts = False
+            
+            ruta_abs = str(self.ruta_destino_final.resolve())
+            wb = excel.Workbooks.Open(ruta_abs)
+            
+            # Buscar hoja "Pagos Importación"
+            ws = None
+            for sheet in wb.Sheets:
+                if sheet.Name.lower() in ["pagos importación", "pagos importacion"]:
+                    ws = sheet
+                    break
+            
+            if not ws:
+                ws = wb.ActiveSheet
+                self.log(f"Usando hoja activa: {ws.Name}", "WARN")
+            
+            # Datos a agregar
+            datos = df_detalle.fillna("").values.tolist()
+            num_nuevas_filas = len(datos)
+            if num_nuevas_filas == 0: return
+
+            # Encontrar última fila con datos
+            last_row = ws.Cells(ws.Rows.Count, 1).End(-4162).Row # xlUp
+            start_row = last_row + 1
+            
+            # (Corrección en vuelo: este método recibirá ya el df listo para pegar)
+            
+            # Rango destino
+            filas = len(datos)
+            columnas = len(datos[0])
+            rango_dest = ws.Range(ws.Cells(start_row, 1), ws.Cells(start_row + filas - 1, columnas))
+            rango_dest.Value = datos
+            
+            # EXPANDIR TABLA (ListObject)
+            if ws.ListObjects.Count > 0:
+                tbl = ws.ListObjects(1) # Asumimos la primera tabla
+                # Redimensionar
+                # Rango completo nueva tabla: Desde cabecera hasta última fila nueva
+                # La tabla suele empezar en A1? O donde empiece.
+                rango_tbl_header = tbl.HeaderRowRange
+                fila_inicio = rango_tbl_header.Row
+                col_inicio = rango_tbl_header.Column
+                
+                nuevo_rango_str = f"{ws.Cells(fila_inicio, col_inicio).Address}:{ws.Cells(start_row + filas - 1, columnas).Address}"
+                
+                try:
+                    tbl.Resize(ws.Range(nuevo_rango_str))
+                    self.log("Tabla expandida correctamente", "OK")
+                except Exception as e:
+                    self.log(f"No se pudo redimensionar tabla: {e}", "WARN")
+            
+            wb.Save()
+            self.log("Registros anexados exitosamente", "OK")
+            
+        except Exception as e:
+            self.log(f"Error COM en archivo final: {str(e)}", "ERROR")
+            raise e
+        finally:
+            if wb: wb.Close()
+            if excel: excel.Quit()
+            pythoncom.CoUninitialize()
+            
+    # Método auxiliar para preparar el DF final (extraído de la lógica anterior)
+    def preparar_df_final(self, df_detalle):
         df_final_append = pd.DataFrame()
-        
-        # Mapeo y Constantes
         fecha_proyeccion = self.fecha_filtrado
         
-        # Columnas directas
         df_final_append['IMPORTADOR'] = df_detalle['IMPORTADOR']
         df_final_append['MARCA'] = df_detalle['MARCA']
-
-         # Fechas
-        # FECHA DE PAGO => Dia del archivo (que es la fecha de proyección)
-        # Formato numérico de Excel para fechas es dias desde 1900, pero aqui piden "dia/mes/año todo en número"
-        # Asumiremos string "dd/mm/yyyy" o fecha datetime
         df_final_append['FECHA DE PAGO'] = fecha_proyeccion.strftime('%d/%m/%Y')
-        
-        df_final_append['DIA'] = """ fecha_proyeccion.day """ ''
-        df_final_append['MES'] = """ fecha_proyeccion.month """ ''
-        df_final_append['AÑO'] = """ fecha_proyeccion.year """ ''
+        df_final_append['DIA'] = fecha_proyeccion.day
+        df_final_append['MES'] = fecha_proyeccion.month
+        df_final_append['AÑO'] = fecha_proyeccion.year
         df_final_append['PROVEEDOR'] = df_detalle['PROVEEDOR']
         df_final_append['# IMPORTACION'] = df_detalle['NRO. IMPO']
-        
-        # Valores
         df_final_append['VALOR MONEDA ORIGEN'] = df_detalle['VALOR A PAGAR']
         df_final_append['MONEDA'] = df_detalle['MONEDA']
         
-        # Calculados
         def calc_valor_usd(row):
-            if str(row['MONEDA']).upper() == 'USD':
-                return row['VALOR A PAGAR']
+            if str(row['MONEDA']).upper() == 'USD': return row['VALOR A PAGAR']
             return ''
-            
         def calc_factor(row):
-            if str(row['MONEDA']).upper() == 'USD':
-                return 1
+            if str(row['MONEDA']).upper() == 'USD': return 1
             return ''
             
         df_final_append['VALOR USD'] = df_detalle.apply(calc_valor_usd, axis=1)
         df_final_append['FACTOR DE CONVERSION'] = df_detalle.apply(calc_factor, axis=1)
-        
-        # Constantes
         df_final_append['DESCUENTO PRONTO PAGO'] = 0
-        df_final_append['FORMA DE PAGO'] = '' # Manual
+        df_final_append['FORMA DE PAGO'] = ''
         df_final_append['TIPO DE PAGO'] = 'CUENTA COMPENSACION'
         df_final_append['FECHA DE APERTURA CREDITO -UTILIZACION LC'] = 'N/A'
         df_final_append['FECHA DE VENCIMIENTO'] = 'N/A'
         df_final_append['# CREDITO'] = 'N/A'
         df_final_append['# DEUDA EXTERNA'] = 'N/A'
-        
-        # Agregar columna NOTA CREDITO al final si se requiere (según imagen parece estar)
-        # El usuario dijo: "solo cambia VALOR NOTA CRÉDITO se llama NOTA CRÉDITO" en la segunda hoja
-        # En el archivo final, la imagen muestra 'NOTA CREDITO' al final.
         df_final_append['NOTA CREDITO'] = df_detalle['NOTA CRÉDITO']
-
-        self.log(f"Registros a agregar: {len(df_final_append)}", "INFO")
         
-        # Escribir en archivo final (Append)
-        try:
-            # Cargar workbook existente
-            wb = openpyxl.load_workbook(self.ruta_destino_final)
-            ws_name = "Pagos Importación" # Nombre probable, usuario dijo "Pagos Importación"
-            
-            # Verificar nombre de hoja correcta
-            target_sheet = None
-            for sheet in wb.sheetnames:
-                if sheet.lower() == "pagos importación" or sheet.lower() == "pagos importacion":
-                    target_sheet = sheet
-                    break
-            
-            if not target_sheet:
-                # Si no existe, usar la activa o crear
-                target_sheet = wb.active.title
-                self.log(f"No se halló hoja exacta, usando '{target_sheet}'", "WARN")
-            
-            ws = wb[target_sheet]
-            
-            # Encontrar última fila
-            last_row = ws.max_row
-            
-            # Convertir DataFrame a filas para openpyxl
-            rows = dataframe_to_rows(df_final_append, index=False, header=False)
-            
-            for r_idx, row in enumerate(rows, 1):
-                for c_idx, value in enumerate(row, 1):
-                    ws.cell(row=last_row + r_idx, column=c_idx, value=value)
-            
-            self.guardar_con_reintento(wb, self.ruta_destino_final)
-            wb.close()
-            self.log("Registros agregados al archivo final exitosamente", "OK")
-            
-        except Exception as e:
-            self.log(f"Error al escribir en archivo final: {str(e)}", "ERROR")
-
-    def aplicar_formato_excel(self, ruta_archivo, nombre_segunda_hoja):
-        """Aplica formato profesional a la hoja de proyección"""
-        self.log(f"Aplicando formato...", "PROCESO")
-        
-        wb = openpyxl.load_workbook(ruta_archivo)
-        
-        if nombre_segunda_hoja in wb.sheetnames:
-            ws = wb[nombre_segunda_hoja]
-            
-            header_fill = PatternFill(start_color="9582b3", end_color="9582b3", fill_type="solid")
-            header_font = Font(bold=True, color="FFFFFF", size=11)
-            total_fill = PatternFill(start_color="aee6b8", end_color="aee6b8", fill_type="solid")
-            total_font = Font(bold=True, size=10)
-            
-            border_thin = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
-            
-            # Formato encabezados
-            for cell in ws[1]:
-                cell.fill = header_fill
-                cell.font = header_font
-                cell.alignment = Alignment(horizontal='center', vertical='center')
-                cell.border = border_thin
-            
-            # Autoajuste básico
-            for col in ws.columns:
-                max_length = 0
-                column = col[0].column_letter
-                for cell in col:
-                    try:
-                        if len(str(cell.value)) > max_length:
-                            max_length = len(str(cell.value))
-                    except:
-                        pass
-                adjusted_width = (max_length + 2)
-                ws.column_dimensions[column].width = adjusted_width
-            
-            # Bordes y formato de totales
-            for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
-                for cell in row:
-                    cell.border = border_thin
-                
-                # Identificar fila de total (si IMPORTADOR está vacío pero hay VALOR A PAGAR)
-                # Columna A es index 0. Si row[0] es vacio...
-                if row[0].value in [None, '']:
-                    for cell in row:
-                        cell.fill = total_fill, r"\n"
-                        cell.font = total_font
-                
-                # Formato números (VALOR A PAGAR es col index 6, NOTA CREDITO index 5)
-                # Columnas: IMPORTADOR(0), MARCA(1), PROVEEDOR(2), NRO. IMPO(3), MONEDA(4), NOTA CREDITO(5), VALOR A PAGAR(6)
-                if isinstance(row[6].value, (int, float)):
-                    row[6].number_format = '#,##0.00'
-                if isinstance(row[5].value, (int, float)):
-                    row[5].number_format = '#,##0.00'
-
-            ws.freeze_panes = 'A2'
-        
-        self.guardar_con_reintento(wb, ruta_archivo)
-        wb.close()
-        self.log(f"Formato aplicado", "OK")
+        return df_final_append
 
     def ejecutar_proceso(self):
         """Ejecuta el proceso completo"""
@@ -670,24 +714,8 @@ class CopiarArchivo:
             
             nombre_segunda_hoja = self.crear_nombre_segunda_hoja(fecha_proyeccion)
             
-            # Escribir segunda hoja
-            while True:
-                try:
-                    with pd.ExcelWriter(
-                        ruta_archivo_nuevo,
-                        engine='openpyxl',
-                        mode='a',
-                        if_sheet_exists='replace'
-                    ) as writer:
-                        df_agrupado.to_excel(writer, sheet_name=nombre_segunda_hoja, index=False)
-                    break
-                except PermissionError:
-                    self.log(f"EL ARCHIVO ESTÁ ABIERTO: {nombre_archivo}", "WARN")
-                    print("⚠ Por favor, cierre el archivo en Excel para continuar.")
-                    respuesta = input("Presione ENTER cuando lo haya cerrado (o 'C' para cancelar): ")
-                    if respuesta.strip().upper() == 'C': raise Exception("Cancelado")
-
-            self.aplicar_formato_excel(ruta_archivo_nuevo, nombre_segunda_hoja)
+            # Escribir segunda hoja usando COM (preserva original)
+            self.guardar_proyeccion_com(ruta_archivo_nuevo, df_agrupado, nombre_segunda_hoja)
             
             # 6. Agregar al Archivo Final
             self.agregar_a_archivo_final(df_segunda) # Usamos df_segunda que tiene el detalle sin agrupar
