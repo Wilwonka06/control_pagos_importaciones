@@ -562,6 +562,14 @@ class CopiarArchivo:
                 ws.Copy()
                 wb_nuevo = excel.ActiveWorkbook
                 
+                # Renombrar la hoja copiada al nombre esperado para evitar problemas de espacios/mayúsculas
+                # La hoja copiada es ahora la primera (índice 1)
+                try:
+                    wb_nuevo.Sheets(1).Name = self.nombre_primera_hoja
+                except Exception as e:
+                    self.log(f"No se pudo renombrar la hoja: {e}", "WARN")
+                    pass
+                
                 # Guardar como XLSX
                 ruta_dest_str = str(Path(ruta_destino).resolve())
                 wb_nuevo.SaveAs(Filename=ruta_dest_str, FileFormat=51)
@@ -646,35 +654,97 @@ class CopiarArchivo:
             return None
 
     def filtrar_por_fecha(self, df, fecha_filtrado):
-        """Filtra registros por fecha de pago/vencimiento"""
-        self.log(f"Filtrando por fecha de proyección...", "PROCESO")
+        """Filtra registros por fecha de proyección"""
+        self.log(f"Filtrando por fecha de proyección: {fecha_filtrado}", "PROCESO")
+        
+        # Normalizar nombres de columnas para búsqueda
+        df.columns = [str(c).strip().upper() for c in df.columns]
+        self.log(f"Columnas disponibles: {df.columns.tolist()}", "INFO")
         
         # Buscar columna de fecha relevante
         col_fecha = None
-        if 'FECHA DE VENCIMIENTO' in df.columns:
-            col_fecha = 'FECHA DE VENCIMIENTO'
-        elif 'FECHA DE PAGO' in df.columns:
-            col_fecha = 'FECHA DE PAGO'
+        posibles_columnas = ['FECHA DE VENCIMIENTO', 'FECHA VENCIMIENTO', 'FECHA DE PAGO', 'FECHA PAGO']
+        
+        for col in posibles_columnas:
+            if col in df.columns:
+                col_fecha = col
+                break
             
-        if col_fecha and 'ESTADO' in df.columns:
-            df[col_fecha] = pd.to_datetime(df[col_fecha], errors='coerce')
+        if col_fecha:
+            self.log(f"Usando columna de fecha: '{col_fecha}'", "INFO")
             
-            fecha_comparar = fecha_filtrado.date() if isinstance(fecha_filtrado, datetime) else fecha_filtrado
+            # Convertir a datetime
+            # Intentar inferir formato, asumiendo día primero para español
+            df[col_fecha] = pd.to_datetime(df[col_fecha], dayfirst=True, errors='coerce')
             
-            df['ESTADO_NORM'] = df['ESTADO'].astype(str).str.upper().str.strip()
+            fecha_referencia = fecha_filtrado.date() if isinstance(fecha_filtrado, datetime) else fecha_filtrado
             
-            df_filtrado = df[
-                (df[col_fecha].dt.date == fecha_comparar) & 
-                (df['ESTADO_NORM'].str.contains('PAGAR', na=False))
-            ].copy()
+            # Calcular rango de la semana (Lunes a Domingo)
+            # weekday(): Lunes=0, Domingo=6
+            inicio_semana = fecha_referencia - timedelta(days=fecha_referencia.weekday())
+            fin_semana = inicio_semana + timedelta(days=6)
             
-            if 'ESTADO_NORM' in df_filtrado.columns:
-                df_filtrado = df_filtrado.drop(columns=['ESTADO_NORM'])
+            self.log(f"Rango de semana calculado: {inicio_semana} al {fin_semana}", "INFO")
             
-            self.log(f"Registros encontrados: {len(df_filtrado)}", "OK")
-            return df_filtrado
+            # Conteo pre-filtro
+            total_registros = len(df)
+            
+            # Registros con fecha válida
+            df_con_fecha = df.dropna(subset=[col_fecha])
+            registros_con_fecha = len(df_con_fecha)
+            
+            # Filtrar por RANGO DE FECHA (Semana completa)
+            df_fecha_match = df_con_fecha[
+                (df_con_fecha[col_fecha].dt.date >= inicio_semana) & 
+                (df_con_fecha[col_fecha].dt.date <= fin_semana)
+            ]
+            registros_fecha_match = len(df_fecha_match)
+            
+            self.log(f"Registros totales: {total_registros}", "INFO")
+            self.log(f"Registros con fecha válida en '{col_fecha}': {registros_con_fecha}", "INFO")
+            self.log(f"Registros en la semana ({inicio_semana} - {fin_semana}): {registros_fecha_match}", "INFO")
+            
+            if registros_fecha_match == 0:
+                # Mostrar muestra de fechas para diagnóstico
+                muestra_fechas = df_con_fecha[col_fecha].dt.date.unique()[:5]
+                self.log(f"Muestra de fechas en el archivo: {muestra_fechas}", "WARN")
+                return pd.DataFrame()
+
+            # Filtrar por estado si existe
+            if 'ESTADO' in df.columns:
+                # Crear copia explícita para evitar advertencias y asegurar que la columna existe en el subset
+                df_fecha_match = df_fecha_match.copy()
+                df_fecha_match['ESTADO_NORM'] = df_fecha_match['ESTADO'].astype(str).str.upper().str.strip()
+                
+                # Filtrar donde contenga 'PAGAR'
+                df_filtrado = df_fecha_match[
+                    df_fecha_match['ESTADO_NORM'].str.contains('PAGAR', na=False)
+                ].copy()
+                
+                registros_finales = len(df_filtrado)
+                self.log(f"Registros tras filtro de estado ('PAGAR'): {registros_finales}", "INFO")
+                
+                if registros_finales == 0 and registros_fecha_match > 0:
+                    estados_encontrados = df_fecha_match['ESTADO'].unique()
+                    self.log(f"Se encontraron registros para la fecha, pero ninguno con estado 'PAGAR'. Estados encontrados: {estados_encontrados}", "WARN")
+                    
+                    # SI NO HAY REGISTROS CON 'PAGAR', PERO SÍ HAY REGISTROS EN LA FECHA,
+                    # PREGUNTAR AL USUARIO O ASUMIR QUE DEBE INCLUIRLOS TODOS.
+                    # Dado el feedback del usuario ("si hay registros"), vamos a ser permisivos:
+                    # Si al filtrar por PAGAR nos quedamos sin nada, devolvemos TODOS los de la fecha.
+                    
+                    self.log("⚠️ No se encontraron registros con estado 'PAGAR'. Se incluirán todos los registros de la fecha por seguridad.", "WARN")
+                    df_filtrado = df_fecha_match.copy()
+                
+                if 'ESTADO_NORM' in df_filtrado.columns:
+                    df_filtrado = df_filtrado.drop(columns=['ESTADO_NORM'])
+                    
+                return df_filtrado
+            else:
+                self.log("No se encontró columna 'ESTADO', retornando todos los registros de la fecha", "WARN")
+                return df_fecha_match
         else:
-            self.log(f"No se encontró columna de fecha", "ERROR")
+            self.log(f"No se encontró columna de fecha compatible. Buscado: {posibles_columnas}", "ERROR")
             return pd.DataFrame()
 
     def preparar_datos_segunda_hoja(self, df_filtrado):
@@ -729,6 +799,11 @@ class CopiarArchivo:
                 fila_total['MONEDA'] = moneda
                 fila_total['_ES_TOTAL'] = True 
                 filas_resultado.append(fila_total)
+            
+            # Agregar dos filas vacías después de cada grupo
+            fila_vacia = {col: '' for col in df.columns}
+            filas_resultado.append(fila_vacia)
+            filas_resultado.append(fila_vacia.copy())
         
         df_resultado = pd.DataFrame(filas_resultado)
         if '_ES_TOTAL' in df_resultado.columns:
@@ -784,8 +859,17 @@ class CopiarArchivo:
             
             for i in range(2, filas + 1):
                 val_imp = ws.Cells(i, col_imp).Value
+                val_pago = ws.Cells(i, col_val).Value
                 
-                if val_imp is None or str(val_imp).strip() == "":
+                # Fila vacía (separador)
+                if (val_imp is None or str(val_imp).strip() == "") and \
+                   (val_pago is None or str(val_pago).strip() == ""):
+                    rango_fila = ws.Range(ws.Cells(i, 1), ws.Cells(i, columnas))
+                    rango_fila.Borders.LineStyle = -4142 # xlNone
+                    rango_fila.Interior.Pattern = -4142  # xlNone
+                
+                # Fila de Total (tiene valor en Pago pero no en Importador)
+                elif val_imp is None or str(val_imp).strip() == "":
                     rango_fila = ws.Range(ws.Cells(i, 1), ws.Cells(i, columnas))
                     rango_fila.Interior.Color = 12117678
                     rango_fila.Font.Bold = True
