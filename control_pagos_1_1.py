@@ -2,11 +2,10 @@
 AUTOMATIZACIÓN COMPLETA - CONTROL DE PAGOS
 """
 
-import shutil
 import pandas as pd
 import win32com.client
 import pythoncom
-from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+from openpyxl.styles import Font, Alignment
 from openpyxl.utils.dataframe import dataframe_to_rows
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -14,7 +13,6 @@ import locale
 import tkinter as tk
 from tkinter import ttk, messagebox
 from tkcalendar import DateEntry
-import sys
 
 # Configuración de español
 try:
@@ -461,7 +459,7 @@ class CopiarArchivo:
     """Clase principal para el procesamiento de archivos"""
     def __init__(self, fecha_filtrado=None, ventana_progreso=None):
         # RUTAS
-        self.ruta_origen = Path(r"C:\Users\auxtesoreria2\OneDrive - GCO\Escritorio\CONTROL DE PAGOS.xlsx")
+        self.ruta_origen = Path(r"C:\Users\auxtesoreria2\OneDrive - GCO\Escritorio\CONTROL DE PAGOS.xlsm")
         self.ruta_intermedio = Path(r"C:\Users\auxtesoreria2\OneDrive - GCO\Escritorio\finanzas\info bancos\Pagos internacionales\proyección semana")
         self.ruta_destino_final = Path(r"C:\Users\auxtesoreria2\OneDrive - GCO\Escritorio\finanzas\info bancos\Pagos internacionales\CONTROL PAGOS.xlsx")
 
@@ -528,21 +526,79 @@ class CopiarArchivo:
         return carpeta_destino
 
     def copiar_archivo_base(self, ruta_destino):
-        """Copia el archivo base"""
-        self.log(f"Copiando archivo base...", "PROCESO")
+        """Copia el archivo base usando Win32 para evadir macros"""
+        self.log(f"Copiando archivo base (Win32)...", "PROCESO")
+        
+        excel = None
+        wb = None
         
         while True:
             try:
-                shutil.copy2(self.ruta_origen, ruta_destino)
+                pythoncom.CoInitialize()
+                # Usar DispatchEx para instancia aislada y segura
+                excel = win32com.client.DispatchEx("Excel.Application")
+                excel.Visible = False
+                excel.DisplayAlerts = False
+                excel.AutomationSecurity = 3 
+                
+                # Abrir solo lectura y sin actualizar enlaces
+                wb = excel.Workbooks.Open(str(self.ruta_origen), ReadOnly=True, UpdateLinks=0)
+                
+                # Seleccionar solo la hoja de interés
+                try:
+                    ws = wb.Sheets(self.nombre_primera_hoja)
+                except:
+                    # Búsqueda insensible a mayúsculas
+                    found = False
+                    for s in wb.Sheets:
+                        if s.Name.lower() == self.nombre_primera_hoja.lower():
+                            ws = s
+                            found = True
+                            break
+                    if not found:
+                        raise Exception(f"No se encontró la hoja '{self.nombre_primera_hoja}'")
+
+                # Copiar hoja a un NUEVO libro
+                ws.Copy()
+                wb_nuevo = excel.ActiveWorkbook
+                
+                # Guardar como XLSX
+                ruta_dest_str = str(Path(ruta_destino).resolve())
+                wb_nuevo.SaveAs(Filename=ruta_dest_str, FileFormat=51)
+                
+                try: wb_nuevo.Close(SaveChanges=False)
+                except: pass
+                
+                # Cerrar original
+                try: wb.Close(SaveChanges=False)
+                except: pass
+                wb = None 
+                
+                self.log("Copia de hoja única realizada exitosamente.", "OK")
                 break
-            except PermissionError:
-                self.log(f"EL ARCHIVO ORIGEN ESTÁ ABIERTO: {self.ruta_origen.name}", "WARN")
-                respuesta = messagebox.askretrycancel(
-                    "Archivo Abierto",
-                    f"El archivo '{self.ruta_origen.name}' está abierto.\n\nPor favor, ciérrelo para continuar."
-                )
-                if not respuesta:
+                
+            except Exception as e:
+                self.log(f"Error copiando: {e}", "WARN")
+                print("⚠ No se pudo copiar el archivo. Asegúrese de que 'CONTROL PAGOS' no esté bloqueado.")
+                respuesta = input("Presione ENTER para reintentar (o 'C' para cancelar): ")
+                if respuesta.strip().upper() == 'C':
+                    # Limpieza segura antes de salir
+                    if wb: 
+                        try: wb.Close(SaveChanges=False)
+                        except: pass
+                    if excel: 
+                        try: excel.Quit()
+                        except: pass
                     raise Exception("Cancelado por el usuario")
+            finally:
+                # Asegurar cierre en cualquier caso
+                if wb: 
+                    try: wb.Close(SaveChanges=False)
+                    except: pass
+                if excel: 
+                    try: excel.Quit()
+                    except: pass
+                pythoncom.CoUninitialize()
 
     def guardar_con_reintento(self, wb, ruta):
         """Guarda un workbook con lógica de reintento"""
@@ -691,6 +747,7 @@ class CopiarArchivo:
             excel = win32com.client.Dispatch("Excel.Application")
             excel.Visible = False
             excel.DisplayAlerts = False
+            excel.AutomationSecurity = 3 # Desactivar macros
             
             ruta_abs = str(Path(ruta_archivo).resolve())
             wb = excel.Workbooks.Open(ruta_abs)
@@ -770,12 +827,15 @@ class CopiarArchivo:
             excel = win32com.client.Dispatch("Excel.Application")
             excel.Visible = False
             excel.DisplayAlerts = False
+            excel.AutomationSecurity = 3 # Desactivar macros
             
             ruta_abs = str(self.ruta_destino_final.resolve())
             wb = excel.Workbooks.Open(ruta_abs)
             
             ws = None
             for sheet in wb.Sheets:
+                sheet.Visible = -1
+                print(sheet.Name)
                 if sheet.Name.lower() in ["pagos importación", "pagos importacion"]:
                     ws = sheet
                     break
@@ -816,6 +876,7 @@ class CopiarArchivo:
             self.log(f"Error en archivo final: {str(e)}", "ERROR")
             raise e
         finally:
+            excel.AutomationSecurity = 1
             if wb: wb.Close()
             if excel: excel.Quit()
             pythoncom.CoUninitialize()
@@ -852,7 +913,8 @@ class CopiarArchivo:
         df_final_append['FECHA DE VENCIMIENTO'] = 'N/A'
         df_final_append['# CREDITO'] = 'N/A'
         df_final_append['# DEUDA EXTERNA'] = 'N/A'
-        df_final_append['NOTA CREDITO'] = df_detalle['NOTA CRÉDITO']
+        df_final_append['NOTA CREDITO'] = 0.00
+        df_final_append['OBSERVACIONES'] = ''
         
         return df_final_append
 
@@ -936,7 +998,7 @@ def main():
     if not messagebox.askyesno(
         "Confirmar Ejecución",
         "Antes de continuar, asegúrese de:\n\n"
-        "✓ Haber actualizado el archivo 'CONTROL DE PAGOS.xlsx'\n"
+        "✓ Haber actualizado el archivo 'CONTROL DE PAGOS.xlsm'\n"
         "✓ Haber guardado todos los cambios\n"
         "✓ Cerrar el archivo si está abierto\n\n"
         "¿Desea continuar?"
