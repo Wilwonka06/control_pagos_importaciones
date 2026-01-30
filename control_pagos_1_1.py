@@ -1,5 +1,6 @@
 """
-AUTOMATIZACIÓN COMPLETA - CONTROL DE PAGOS
+AUTOMATIZACIÓN COMPLETA - CONTROL DE PAGOS - VERSIÓN CORREGIDA
+Corrige problemas con macros que ocultan hojas y manejo de columnas
 """
 
 import pandas as pd
@@ -13,6 +14,9 @@ import locale
 import tkinter as tk
 from tkinter import ttk, messagebox
 from tkcalendar import DateEntry
+import configparser
+import sys
+import time
 
 # Configuración de español
 try:
@@ -375,7 +379,7 @@ class VentanaProgreso:
     def __init__(self, parent=None):
         self.ventana = tk.Toplevel(parent) if parent else tk.Tk()
         self.ventana.title("Procesando...")
-        self.ventana.geometry("500x250")
+        self.ventana.geometry("500x350")
         self.ventana.resizable(False, False)
         self.ventana.configure(bg="#ECF0F1")
         
@@ -418,7 +422,7 @@ class VentanaProgreso:
         # Log de acciones
         self.log_text = tk.Text(
             main_frame,
-            height=5,
+            height=10,
             width=50,
             font=("Consolas", 8),
             bg="#F8F9F9",
@@ -456,23 +460,59 @@ class VentanaProgreso:
         self.ventana.destroy()
 
 class CopiarArchivo:
-    """Clase principal para el procesamiento de archivos"""
+    """Clase principal para el procesamiento de archivos - VERSIÓN CORREGIDA"""
     def __init__(self, fecha_filtrado=None, ventana_progreso=None):
-        # RUTAS
-        self.ruta_origen = Path(r"C:\Users\auxtesoreria2\OneDrive - GCO\Escritorio\CONTROL DE PAGOS.xlsm")
-        self.ruta_intermedio = Path(r"C:\Users\auxtesoreria2\OneDrive - GCO\Escritorio\finanzas\info bancos\Pagos internacionales\proyección semana")
-        self.ruta_destino_final = Path(r"C:\Users\auxtesoreria2\OneDrive - GCO\Escritorio\finanzas\info bancos\Pagos internacionales\CONTROL PAGOS.xlsx")
+        # Configuración de rutas
+        self.config = configparser.ConfigParser()
+        
+        # Determinar ubicación del ejecutable o script
+        if getattr(sys, 'frozen', False):
+            application_path = Path(sys.executable).parent
+        else:
+            application_path = Path(__file__).parent
+            
+        config_path = application_path / 'config.ini'
+        
+        rutas_configuradas = False
+        
+        if config_path.exists():
+            try:
+                self.config.read(config_path, encoding='utf-8')
+                if 'RUTAS' in self.config:
+                    self.ruta_origen = Path(self.config['RUTAS'].get('ArchivoOrigen', ''))
+                    self.ruta_intermedio = Path(self.config['RUTAS'].get('CarpetaIntermedia', ''))
+                    self.ruta_destino_final = Path(self.config['RUTAS'].get('ArchivoFinal', ''))
+                    rutas_configuradas = True
+            except Exception as e:
+                print(f"Error leyendo config.ini: {e}")
+
+        # Si no hay config, usar rutas por defecto
+        if not rutas_configuradas:
+            base_path = Path.home() / "OneDrive - GCO" / "Escritorio"
+            
+            if not base_path.exists():
+                 base_path_alt = Path.home() / "OneDrive" / "Escritorio"
+                 if base_path_alt.exists():
+                     base_path = base_path_alt
+                 else:
+                     base_path = Path.home() / "Desktop"
+                     if not base_path.exists():
+                         base_path = Path.home() / "Escritorio"
+            
+            self.ruta_origen = base_path / "00.CONTROL DE PAGOS 2026 1.xlsm"
+            self.ruta_intermedio = base_path / "finanzas" / "info bancos" / "Pagos internacionales" / "proyección semana"
+            self.ruta_destino_final = base_path / "finanzas" / "info bancos" / "Pagos internacionales" / "CONTROL PAGOS.xlsx"
 
         # NOMBRES DE HOJAS
         self.nombre_primera_hoja = "Control_Pagos"
         
-        # FECHA DE PROYECCIÓN (FILTRADO)
+        # FECHA DE PROYECCIÓN
         self.fecha_filtrado = fecha_filtrado
         
         # Ventana de progreso
         self.ventana_progreso = ventana_progreso
         
-        # COLUMNAS PARA LA SEGUNDA HOJA (PROYECCIÓN)
+        # COLUMNAS PARA LA SEGUNDA HOJA
         self.columnas_segunda_hoja = [
             'IMPORTADOR',
             'MARCA', 
@@ -525,88 +565,156 @@ class CopiarArchivo:
         carpeta_destino.mkdir(parents=True, exist_ok=True)
         return carpeta_destino
 
+    def mostrar_todas_hojas(self, wb):
+        """
+        MÉTODO CRÍTICO: Muestra TODAS las hojas del workbook antes de copiar
+        Esto evita problemas con macros que ocultan hojas (Workbook_Open, etc)
+        """
+        self.log("Forzando visibilidad de TODAS las hojas...", "INFO")
+        try:
+            for sheet in wb.Sheets:
+                try:
+                    # xlSheetVisible = -1
+                    sheet.Visible = -1
+                    self.log(f"  - Hoja '{sheet.Name}' ahora visible", "INFO")
+                except Exception as e:
+                    self.log(f"  - No se pudo hacer visible '{sheet.Name}': {e}", "WARN")
+        except Exception as e:
+            self.log(f"Error al mostrar hojas: {e}", "WARN")
+
     def copiar_archivo_base(self, ruta_destino):
-        """Copia el archivo base usando Win32 para evadir macros"""
-        self.log(f"Copiando archivo base (Win32)...", "PROCESO")
+        """
+        SOLUCIÓN SIMPLE Y EFECTIVA:
+        1. Abrir archivo origen
+        2. Guardar como .xlsx (sin macros) → Copia TODO
+        3. Eliminar hojas innecesarias
+        4. Mantener solo Control_Pagos
+        """
+        self.log(f"Copiando archivo completo como .xlsx...", "PROCESO")
         
         excel = None
         wb = None
         
-        while True:
-            try:
-                pythoncom.CoInitialize()
-                # Usar DispatchEx para instancia aislada y segura
-                excel = win32com.client.DispatchEx("Excel.Application")
-                excel.Visible = False
-                excel.DisplayAlerts = False
-                excel.AutomationSecurity = 3 
-                
-                # Abrir solo lectura y sin actualizar enlaces
-                wb = excel.Workbooks.Open(str(self.ruta_origen), ReadOnly=True, UpdateLinks=0)
-                
-                # Seleccionar solo la hoja de interés
+        try:
+            pythoncom.CoInitialize()
+            
+            # Crear instancia de Excel
+            excel = win32com.client.DispatchEx("Excel.Application")
+            excel.Visible = False
+            excel.DisplayAlerts = False
+            excel.AutomationSecurity = 3  # Desactivar macros
+            excel.EnableEvents = False     # NO ejecutar Workbook_Open
+            
+            # Abrir archivo origen
+            self.log(f"Abriendo archivo: {self.ruta_origen.name}", "INFO")
+            wb = excel.Workbooks.Open(
+                str(self.ruta_origen),
+                ReadOnly=True,
+                UpdateLinks=0,
+                IgnoreReadOnlyRecommended=True,
+                Notify=False
+            )
+            
+            # FORZAR visibilidad de todas las hojas ANTES de guardar
+            self.log("Haciendo visibles todas las hojas...", "INFO")
+            for sheet in wb.Sheets:
                 try:
-                    ws = wb.Sheets(self.nombre_primera_hoja)
-                except:
-                    # Búsqueda insensible a mayúsculas
-                    found = False
-                    for s in wb.Sheets:
-                        if s.Name.lower() == self.nombre_primera_hoja.lower():
-                            ws = s
-                            found = True
-                            break
-                    if not found:
-                        raise Exception(f"No se encontró la hoja '{self.nombre_primera_hoja}'")
-
-                # Copiar hoja a un NUEVO libro
-                ws.Copy()
-                wb_nuevo = excel.ActiveWorkbook
-                
-                # Renombrar la hoja copiada al nombre esperado para evitar problemas de espacios/mayúsculas
-                # La hoja copiada es ahora la primera (índice 1)
-                try:
-                    wb_nuevo.Sheets(1).Name = self.nombre_primera_hoja
+                    sheet.Visible = -1  # xlSheetVisible
+                    self.log(f"  ✓ '{sheet.Name}' visible", "INFO")
                 except Exception as e:
-                    self.log(f"No se pudo renombrar la hoja: {e}", "WARN")
+                    self.log(f"  ⚠ No se pudo hacer visible '{sheet.Name}': {e}", "WARN")
+            
+            # Verificar que la hoja objetivo existe
+            hoja_encontrada = False
+            for sheet in wb.Sheets:
+                if sheet.Name.lower() == self.nombre_primera_hoja.lower():
+                    hoja_encontrada = True
+                    self.log(f"✓ Hoja objetivo encontrada: '{sheet.Name}'", "OK")
+                    break
+            
+            if not hoja_encontrada:
+                hojas = [s.Name for s in wb.Sheets]
+                raise Exception(f"No se encontró hoja '{self.nombre_primera_hoja}'. Disponibles: {hojas}")
+            
+            # GUARDAR COMO .XLSX (esto copia TODO el contenido sin macros)
+            ruta_dest_str = str(Path(ruta_destino).resolve())
+            self.log(f"Guardando como .xlsx: {Path(ruta_destino).name}", "INFO")
+            
+            # FileFormat 51 = xlsx (sin macros)
+            wb.SaveAs(
+                Filename=ruta_dest_str,
+                FileFormat=51,
+                CreateBackup=False
+            )
+            
+            self.log("✓ Archivo guardado como .xlsx", "OK")
+            
+            # Cerrar el archivo original
+            wb.Close(SaveChanges=False)
+            wb = None
+            
+            # ABRIR EL NUEVO ARCHIVO para limpiar hojas
+            self.log("Abriendo archivo nuevo para limpieza...", "INFO")
+            wb = excel.Workbooks.Open(ruta_dest_str)
+            
+            # ELIMINAR todas las hojas EXCEPTO la que necesitamos
+            self.log("Eliminando hojas innecesarias...", "INFO")
+            excel.DisplayAlerts = False  # No preguntar al eliminar
+            
+            hojas_a_eliminar = []
+            for sheet in wb.Sheets:
+                if sheet.Name.lower() != self.nombre_primera_hoja.lower():
+                    hojas_a_eliminar.append(sheet.Name)
+            
+            for nombre_hoja in hojas_a_eliminar:
+                try:
+                    wb.Sheets(nombre_hoja).Delete()
+                    self.log(f"  ✓ Eliminada: '{nombre_hoja}'", "INFO")
+                except Exception as e:
+                    self.log(f"  ⚠ No se pudo eliminar '{nombre_hoja}': {e}", "WARN")
+            
+            excel.DisplayAlerts = True
+            
+            # Verificar que quedó solo la hoja correcta
+            if wb.Sheets.Count == 1:
+                self.log(f"✓ Archivo limpio. Solo queda: '{wb.Sheets(1).Name}'", "OK")
+            else:
+                self.log(f"⚠ Advertencia: Quedaron {wb.Sheets.Count} hojas", "WARN")
+            
+            # GUARDAR cambios
+            wb.Save()
+            self.log("✓ Cambios guardados", "OK")
+            
+            # Cerrar
+            wb.Close(SaveChanges=False)
+            wb = None
+            
+            self.log("✓ Proceso de copia completado exitosamente", "OK")
+            
+        except Exception as e:
+            self.log(f"ERROR al copiar archivo: {e}", "ERROR")
+            import traceback
+            traceback.print_exc()
+            raise
+            
+        finally:
+            # Limpieza
+            if wb:
+                try:
+                    wb.Close(SaveChanges=False)
+                except:
                     pass
-                
-                # Guardar como XLSX
-                ruta_dest_str = str(Path(ruta_destino).resolve())
-                wb_nuevo.SaveAs(Filename=ruta_dest_str, FileFormat=51)
-                
-                try: wb_nuevo.Close(SaveChanges=False)
-                except: pass
-                
-                # Cerrar original
-                try: wb.Close(SaveChanges=False)
-                except: pass
-                wb = None 
-                
-                self.log("Copia de hoja única realizada exitosamente.", "OK")
-                break
-                
-            except Exception as e:
-                self.log(f"Error copiando: {e}", "WARN")
-                print("⚠ No se pudo copiar el archivo. Asegúrese de que 'CONTROL PAGOS' no esté bloqueado.")
-                respuesta = input("Presione ENTER para reintentar (o 'C' para cancelar): ")
-                if respuesta.strip().upper() == 'C':
-                    # Limpieza segura antes de salir
-                    if wb: 
-                        try: wb.Close(SaveChanges=False)
-                        except: pass
-                    if excel: 
-                        try: excel.Quit()
-                        except: pass
-                    raise Exception("Cancelado por el usuario")
-            finally:
-                # Asegurar cierre en cualquier caso
-                if wb: 
-                    try: wb.Close(SaveChanges=False)
-                    except: pass
-                if excel: 
-                    try: excel.Quit()
-                    except: pass
+            
+            if excel:
+                try:
+                    excel.Quit()
+                except:
+                    pass
+            
+            try:
                 pythoncom.CoUninitialize()
+            except:
+                pass
 
     def guardar_con_reintento(self, wb, ruta):
         """Guarda un workbook con lógica de reintento"""
@@ -624,41 +732,72 @@ class CopiarArchivo:
                     raise Exception("Cancelado por el usuario")
 
     def leer_datos_control_pagos(self, ruta_archivo):
-        """Lee los datos del archivo de control de pagos"""
+        """Lee los datos del archivo de control de pagos - VERSIÓN CORREGIDA"""
         try:
             self.log(f"Leyendo hoja '{self.nombre_primera_hoja}'...", "PROCESO")
             
+            # Leer con openpyxl
             df = pd.read_excel(
                 ruta_archivo, 
                 sheet_name=self.nombre_primera_hoja, 
-                engine='openpyxl'
+                engine='openpyxl',
+                dtype=str  # CRÍTICO: Leer todo como string para evitar problemas
             )
             
-            # Limpiar nombres de columnas
-            df.columns = df.columns.str.strip()
+            # CORRECCIÓN CRÍTICA: Limpiar nombres de columnas asegurando que sean strings
+            columnas_limpias = []
+            for col in df.columns:
+                # Convertir a string y limpiar
+                col_str = str(col).strip()
+                columnas_limpias.append(col_str)
             
-            # Renombrar columnas para estandarizar
+            df.columns = columnas_limpias
+            
+            self.log(f"Columnas detectadas: {df.columns.tolist()[:5]}...", "INFO")
+            
+            # Verificar si el DataFrame está vacío
+            if df.empty:
+                self.log("El archivo leído no contiene datos.", "WARN")
+                return None
+            
+            # Renombrar columnas para estandarizar (case-insensitive)
             column_mapping = {
                 '# IMPORTACION': 'NRO. IMPO',
+                '#IMPORTACION': 'NRO. IMPO',
                 'VALOR MONEDA ORIGEN': 'VALOR A PAGAR',
-                'NOTA CREDITO': 'NOTA CREDITO',
-                'VALOR NOTA CRÉDITO': 'NOTA CRÉDITO'
+                'NOTA CREDITO': 'NOTA CRÉDITO',
+                'VALOR NOTA CRÉDITO': 'NOTA CRÉDITO',
+                'VALOR NOTA CREDITO': 'NOTA CRÉDITO'
             }
-            df = df.rename(columns=column_mapping)
+            
+            # Aplicar renombrado (case-insensitive)
+            for old_col, new_col in column_mapping.items():
+                for actual_col in df.columns:
+                    if actual_col.upper() == old_col.upper():
+                        df.rename(columns={actual_col: new_col}, inplace=True)
+                        break
             
             self.log(f"Archivo leído: {len(df)} registros totales", "OK")
             return df
             
         except Exception as e:
             self.log(f"Error al leer el archivo: {str(e)}", "ERROR")
+            import traceback
+            traceback.print_exc()
             return None
 
     def filtrar_por_fecha(self, df, fecha_filtrado):
-        """Filtra registros por fecha de proyección"""
+        """Filtra registros por fecha de proyección - VERSIÓN CORREGIDA"""
         self.log(f"Filtrando por fecha de proyección: {fecha_filtrado}", "PROCESO")
         
-        # Normalizar nombres de columnas para búsqueda
-        df.columns = [str(c).strip().upper() for c in df.columns]
+        # CORRECCIÓN: Normalizar nombres de columnas SIN usar .str en columnas que pueden ser integers
+        columnas_normalizadas = []
+        for col in df.columns:
+            col_normalizado = str(col).strip().upper()
+            columnas_normalizadas.append(col_normalizado)
+        
+        df.columns = columnas_normalizadas
+        
         self.log(f"Columnas disponibles: {df.columns.tolist()}", "INFO")
         
         # Buscar columna de fecha relevante
@@ -674,13 +813,11 @@ class CopiarArchivo:
             self.log(f"Usando columna de fecha: '{col_fecha}'", "INFO")
             
             # Convertir a datetime
-            # Intentar inferir formato, asumiendo día primero para español
             df[col_fecha] = pd.to_datetime(df[col_fecha], dayfirst=True, errors='coerce')
             
             fecha_referencia = fecha_filtrado.date() if isinstance(fecha_filtrado, datetime) else fecha_filtrado
             
             # Calcular rango de la semana (Lunes a Domingo)
-            # weekday(): Lunes=0, Domingo=6
             inicio_semana = fecha_referencia - timedelta(days=fecha_referencia.weekday())
             fin_semana = inicio_semana + timedelta(days=6)
             
@@ -712,7 +849,6 @@ class CopiarArchivo:
 
             # Filtrar por estado si existe
             if 'ESTADO' in df.columns:
-                # Crear copia explícita para evitar advertencias y asegurar que la columna existe en el subset
                 df_fecha_match = df_fecha_match.copy()
                 df_fecha_match['ESTADO_NORM'] = df_fecha_match['ESTADO'].astype(str).str.upper().str.strip()
                 
@@ -726,14 +862,8 @@ class CopiarArchivo:
                 
                 if registros_finales == 0 and registros_fecha_match > 0:
                     estados_encontrados = df_fecha_match['ESTADO'].unique()
-                    self.log(f"Se encontraron registros para la fecha, pero ninguno con estado 'PAGAR'. Estados encontrados: {estados_encontrados}", "WARN")
-                    
-                    # SI NO HAY REGISTROS CON 'PAGAR', PERO SÍ HAY REGISTROS EN LA FECHA,
-                    # PREGUNTAR AL USUARIO O ASUMIR QUE DEBE INCLUIRLOS TODOS.
-                    # Dado el feedback del usuario ("si hay registros"), vamos a ser permisivos:
-                    # Si al filtrar por PAGAR nos quedamos sin nada, devolvemos TODOS los de la fecha.
-                    
-                    self.log("⚠️ No se encontraron registros con estado 'PAGAR'. Se incluirán todos los registros de la fecha por seguridad.", "WARN")
+                    self.log(f"Estados encontrados: {estados_encontrados}", "WARN")
+                    self.log("⚠️ No se encontraron registros con estado 'PAGAR'. Se incluirán todos los de la fecha.", "WARN")
                     df_filtrado = df_fecha_match.copy()
                 
                 if 'ESTADO_NORM' in df_filtrado.columns:
@@ -800,7 +930,7 @@ class CopiarArchivo:
                 fila_total['_ES_TOTAL'] = True 
                 filas_resultado.append(fila_total)
             
-            # Agregar dos filas vacías después de cada grupo
+            # Agregar dos filas vacías
             fila_vacia = {col: '' for col in df.columns}
             filas_resultado.append(fila_vacia)
             filas_resultado.append(fila_vacia.copy())
@@ -822,26 +952,29 @@ class CopiarArchivo:
             excel = win32com.client.Dispatch("Excel.Application")
             excel.Visible = False
             excel.DisplayAlerts = False
-            excel.AutomationSecurity = 3 # Desactivar macros
+            excel.AutomationSecurity = 3
             
             ruta_abs = str(Path(ruta_archivo).resolve())
             wb = excel.Workbooks.Open(ruta_abs)
             
+            # Crear segunda hoja
             try:
                 ws = wb.Sheets.Add(After=wb.Sheets(wb.Sheets.Count))
                 ws.Name = nombre_hoja
             except Exception:
                 ws = excel.ActiveSheet
             
+            # Preparar datos
             datos = [df_datos.columns.tolist()] + df_datos.fillna("").values.tolist()
             
             filas = len(datos)
             columnas = len(datos[0])
             
+            # Escribir datos
             rango_datos = ws.Range(ws.Cells(1, 1), ws.Cells(filas, columnas))
             rango_datos.Value = datos
             
-            # Formato
+            # Formato header
             rango_header = ws.Range(ws.Cells(1, 1), ws.Cells(1, columnas))
             rango_header.Interior.Color = 11764117
             rango_header.Font.Bold = True
@@ -850,38 +983,39 @@ class CopiarArchivo:
             rango_header.VerticalAlignment = -4108
             rango_header.Borders.LineStyle = 1
             
+            # Bordes
             rango_completo = ws.Range(ws.Cells(1, 1), ws.Cells(filas, columnas))
             rango_completo.Borders.LineStyle = 1
             
+            # Formatos especiales
             col_imp = 1
-            col_nc = 6
             col_val = 7
             
             for i in range(2, filas + 1):
                 val_imp = ws.Cells(i, col_imp).Value
                 val_pago = ws.Cells(i, col_val).Value
                 
-                # Fila vacía (separador)
+                # Fila vacía
                 if (val_imp is None or str(val_imp).strip() == "") and \
                    (val_pago is None or str(val_pago).strip() == ""):
                     rango_fila = ws.Range(ws.Cells(i, 1), ws.Cells(i, columnas))
-                    rango_fila.Borders.LineStyle = -4142 # xlNone
-                    rango_fila.Interior.Pattern = -4142  # xlNone
+                    rango_fila.Borders.LineStyle = -4142
+                    rango_fila.Interior.Pattern = -4142
                 
-                # Fila de Total (tiene valor en Pago pero no en Importador)
+                # Fila de Total
                 elif val_imp is None or str(val_imp).strip() == "":
                     rango_fila = ws.Range(ws.Cells(i, 1), ws.Cells(i, columnas))
                     rango_fila.Interior.Color = 12117678
                     rango_fila.Font.Bold = True
             
+            # Formato numérico
             rango_vals = ws.Range(ws.Cells(2, col_val), ws.Cells(filas, col_val))
             rango_vals.NumberFormat = "#,##0.00"
             
-            rango_nc = ws.Range(ws.Cells(2, col_nc), ws.Cells(filas, col_nc))
-            rango_nc.NumberFormat = "#,##0.00"
-            
+            # Autofit
             ws.Columns.AutoFit()
             
+            # Freeze panes
             excel.ActiveWindow.SplitRow = 1
             excel.ActiveWindow.FreezePanes = True
             
@@ -892,8 +1026,10 @@ class CopiarArchivo:
             self.log(f"Error en proyección: {str(e)}", "ERROR")
             raise e
         finally:
-            if wb: wb.Close()
-            if excel: excel.Quit()
+            if wb:
+                wb.Close()
+            if excel:
+                excel.Quit()
             pythoncom.CoUninitialize()
 
     def anexar_archivo_final_com(self, df_detalle):
@@ -911,15 +1047,15 @@ class CopiarArchivo:
             excel = win32com.client.Dispatch("Excel.Application")
             excel.Visible = False
             excel.DisplayAlerts = False
-            excel.AutomationSecurity = 3 # Desactivar macros
+            excel.AutomationSecurity = 3
             
             ruta_abs = str(self.ruta_destino_final.resolve())
             wb = excel.Workbooks.Open(ruta_abs)
             
+            # Buscar hoja
             ws = None
             for sheet in wb.Sheets:
                 sheet.Visible = -1
-                print(sheet.Name)
                 if sheet.Name.lower() in ["pagos importación", "pagos importacion"]:
                     ws = sheet
                     break
@@ -927,18 +1063,23 @@ class CopiarArchivo:
             if not ws:
                 ws = wb.ActiveSheet
             
+            # Preparar datos
             datos = df_detalle.fillna("").values.tolist()
             num_nuevas_filas = len(datos)
-            if num_nuevas_filas == 0: return
+            if num_nuevas_filas == 0:
+                return
 
+            # Encontrar última fila
             last_row = ws.Cells(ws.Rows.Count, 1).End(-4162).Row
             start_row = last_row + 1
             
+            # Escribir datos
             filas = len(datos)
             columnas = len(datos[0])
             rango_dest = ws.Range(ws.Cells(start_row, 1), ws.Cells(start_row + filas - 1, columnas))
             rango_dest.Value = datos
             
+            # Expandir tabla si existe
             if ws.ListObjects.Count > 0:
                 tbl = ws.ListObjects(1)
                 rango_tbl_header = tbl.HeaderRowRange
@@ -960,9 +1101,10 @@ class CopiarArchivo:
             self.log(f"Error en archivo final: {str(e)}", "ERROR")
             raise e
         finally:
-            excel.AutomationSecurity = 1
-            if wb: wb.Close()
-            if excel: excel.Quit()
+            if wb:
+                wb.Close()
+            if excel:
+                excel.Quit()
             pythoncom.CoUninitialize()
             
     def preparar_df_final(self, df_detalle):
@@ -982,10 +1124,13 @@ class CopiarArchivo:
         df_final_append['MONEDA'] = df_detalle['MONEDA']
         
         def calc_valor_usd(row):
-            if str(row['MONEDA']).upper() == 'USD': return row['VALOR A PAGAR']
+            if str(row['MONEDA']).upper() == 'USD':
+                return row['VALOR A PAGAR']
             return ''
+            
         def calc_factor(row):
-            if str(row['MONEDA']).upper() == 'USD': return 1
+            if str(row['MONEDA']).upper() == 'USD':
+                return 1
             return ''
             
         df_final_append['VALOR USD'] = df_detalle.apply(calc_valor_usd, axis=1)
@@ -1013,7 +1158,7 @@ class CopiarArchivo:
     def ejecutar_proceso(self):
         """Ejecuta el proceso completo"""
         print("\n" + "="*80)
-        print("    AUTOMATIZACIÓN DE CONTROL DE PAGOS - VERSIÓN 2.0")
+        print("    AUTOMATIZACIÓN DE CONTROL DE PAGOS - VERSIÓN 2.0 CORREGIDA")
         print("="*80 + "\n")
         
         try:
@@ -1032,7 +1177,8 @@ class CopiarArchivo:
             self.copiar_archivo_base(ruta_archivo_nuevo)
             
             df_original = self.leer_datos_control_pagos(ruta_archivo_nuevo)
-            if df_original is None: return None
+            if df_original is None:
+                return None
             
             df_filtrado = self.filtrar_por_fecha(df_original, fecha_proyeccion)
             
