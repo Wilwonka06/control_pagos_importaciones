@@ -500,8 +500,8 @@ class CopiarArchivo:
                          base_path = Path.home() / "Escritorio"
             
             self.ruta_origen = base_path / "00.CONTROL DE PAGOS 2026 1.xlsm"
-            self.ruta_intermedio = base_path / "finanzas" / "info bancos" / "Pagos internacionales" / "proyección semana"
-            self.ruta_destino_final = base_path / "finanzas" / "info bancos" / "Pagos internacionales" / "CONTROL PAGOS.xlsx"
+            self.ruta_intermedio = base_path / "Finanzas" / "Info Bancos" / "Pagos Internacionales" / "PROYECCION PAGOS SEMANAL Y MENSUAL"
+            self.ruta_destino_final = base_path / "Finanzas" / "Info Bancos" / "Pagos Internacionales" / "CONTROL PAGOS.xlsx"
 
         # NOMBRES DE HOJAS
         self.nombre_primera_hoja = "Control_Pagos"
