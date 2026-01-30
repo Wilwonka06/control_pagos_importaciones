@@ -488,16 +488,14 @@ class CopiarArchivo:
 
         # Si no hay config, usar rutas por defecto
         if not rutas_configuradas:
-            base_path = Path.home() / "OneDrive - GCO" / "Escritorio"
+            base_path = Path.home() / "Este equipo" / "O:"
             
             if not base_path.exists():
-                 base_path_alt = Path.home() / "OneDrive" / "Escritorio"
+                 base_path_alt = Path.home() / "Este equipo" / "O:"
                  if base_path_alt.exists():
                      base_path = base_path_alt
                  else:
-                     base_path = Path.home() / "Desktop"
-                     if not base_path.exists():
-                         base_path = Path.home() / "Escritorio"
+                    Print("No se encontró la ruta por defecto")
             
             self.ruta_origen = base_path / "00.CONTROL DE PAGOS 2026 1.xlsm"
             self.ruta_intermedio = base_path / "Finanzas" / "Info Bancos" / "Pagos Internacionales" / "PROYECCION PAGOS SEMANAL Y MENSUAL"
